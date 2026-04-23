@@ -9,18 +9,32 @@ repository = "https://github.com/xtuc/mooncake-rs"
 keywords = ["mooncake", "transfer-engine", "rdma", "gpu", "ffi"]
 categories = ["external-ffi-bindings", "hardware-support"]
 rust-version = "1.70"
-exclude = ["deps", "install", "Makefile"]
+exclude = [
+    "install",
+    "Makefile",
+    ".git",
+    ".gitmodules",
+    "deps/mooncake/build",
+    "deps/mooncake/**/build",
+    "deps/mooncake/**/CMakeCache.txt",
+    "deps/mooncake/**/CMakeFiles",
+    "deps/mooncake/**/Makefile",
+    "deps/mooncake/**/cmake_install.cmake",
+    "deps/mooncake/**/CTestTestfile.cmake",
+    "deps/mooncake/**/compile_commands.json",
+    "deps/mooncake/**/.ninja_deps",
+    "deps/mooncake/**/.ninja_log",
+    "deps/mooncake/extern/**/build",
+    "target",
+    "*.a",
+    "*.so",
+]
 
 [dependencies]
 libc = "0.2"
 once_cell = "1.19"
 thiserror = "1.0"
 tracing = "0.1"
-
-[features]
-default = []
-# Build cdylib (shared library) - requires C++ libs to be available
-cdylib = []
 
 [build-dependencies]
 cc = "1.0"
