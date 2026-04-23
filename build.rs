@@ -6,37 +6,41 @@ fn main() {
     println!("cargo:rerun-if-env-changed=MOONCAKE_ROOT");
     println!("cargo:rerun-if-env-changed=TRANSFER_ENGINE_LIB_DIR");
 
-    // Check if this is a publish/verify build
+    // Check if this is a local development build
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let is_local_build =
         manifest_dir.join("deps/mooncake/.git").exists() || manifest_dir.join("Makefile").exists();
 
-    if !is_local_build {
-        println!("cargo:warning=Package build detected - skipping C++ library linking");
-        return;
-    }
-
-    // Try pkg-config first
+    // Try pkg-config first (works for both local and published)
     if try_pkg_config() {
         return;
     }
 
-    // Try explicit environment variables
+    // Try explicit environment variables (works for both local and published)
     if try_env_vars() {
         return;
     }
 
-    // Try local install directory
-    if try_local_install(&manifest_dir) {
+    // Try local install directory (only for local development)
+    if is_local_build && try_local_install(&manifest_dir) {
         return;
     }
 
-    // Try system paths
+    // Try system paths (works for both local and published)
     if try_system_paths() {
         return;
     }
 
-    // Not found
+    // If we're in a package build (crates.io), don't fail - just warn
+    // The user needs to install mooncake separately
+    if !is_local_build {
+        println!(
+            "cargo:warning=Mooncake libraries not found. Set MOONCAKE_ROOT or install system-wide."
+        );
+        return;
+    }
+
+    // Not found in local build - this is an error
     print_error_and_panic();
 }
 
