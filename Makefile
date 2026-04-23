@@ -75,11 +75,18 @@ rebuild:
 	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
 	@MOONCAKE_ROOT=$(INSTALL_PREFIX) cargo build --release
 
-# Prepare for publish (build with local libs, then verify)
-publish: mooncake
-	@echo "Preparing for crates.io publish..."
-	@echo "Building with local mooncake libs..."
-	@MOONCAKE_ROOT=$(INSTALL_PREFIX) cargo build --release
-	@echo "Verifying package..."
-	@cargo publish --dry-run --allow-dirty
-	@echo "Ready to publish. Run: cargo publish"
+# Build shared libraries (.so) instead of static
+shared:
+	@echo "Building Mooncake shared libraries (.so)..."
+	@mkdir -p $(MOONCAKE_BUILD_DIR)
+	@cd $(MOONCAKE_BUILD_DIR) && cmake \
+		-DBUILD_SHARED_LIBS=ON \
+		$(CMAKE_OPTIONS) ..
+	@cd $(MOONCAKE_BUILD_DIR) && $(MAKE) -j$$(nproc)
+	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.so $(INSTALL_PREFIX)/lib/ 2>/dev/null || true
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.so $(INSTALL_PREFIX)/lib/ 2>/dev/null || true
+	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
+	@echo "Shared libraries installed to $(INSTALL_PREFIX)/lib:"
+	@echo "  $(INSTALL_PREFIX)/lib/libtransfer_engine.so"
+	@echo "  $(INSTALL_PREFIX)/lib/libmooncake_common.so"
