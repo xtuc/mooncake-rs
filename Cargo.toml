@@ -10,24 +10,12 @@ keywords = ["mooncake", "transfer-engine", "rdma", "gpu", "ffi"]
 categories = ["external-ffi-bindings", "hardware-support"]
 rust-version = "1.70"
 exclude = [
+    "deps",
     "install",
     "Makefile",
     ".git",
     ".gitmodules",
-    "deps/mooncake/build",
-    "deps/mooncake/**/build",
-    "deps/mooncake/**/CMakeCache.txt",
-    "deps/mooncake/**/CMakeFiles",
-    "deps/mooncake/**/Makefile",
-    "deps/mooncake/**/cmake_install.cmake",
-    "deps/mooncake/**/CTestTestfile.cmake",
-    "deps/mooncake/**/compile_commands.json",
-    "deps/mooncake/**/.ninja_deps",
-    "deps/mooncake/**/.ninja_log",
-    "deps/mooncake/extern/**/build",
     "target",
-    "*.a",
-    "*.so",
 ]
 
 [dependencies]
