@@ -4,7 +4,20 @@ use std::path::PathBuf;
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // Try pkg-config first
+    // Check if this is a publish/verify build by detecting if we're in the extracted package
+    // The extracted package won't have the install/ directory or deps/ submodule
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let is_local_build =
+        manifest_dir.join("deps/mooncake/.git").exists() || manifest_dir.join("Makefile").exists();
+
+    if !is_local_build {
+        println!("cargo:warning=Package build detected - skipping C++ library linking");
+        // For published crate, just verify Rust code compiles
+        // Users need to link C++ libs themselves
+        return;
+    }
+
+    // Try to find Mooncake via pkg-config first
     if let Ok(lib) = pkg_config::probe_library("mooncake") {
         println!("cargo:warning=Found Mooncake via pkg-config");
         for path in &lib.link_paths {
@@ -15,8 +28,6 @@ fn main() {
         }
         return;
     }
-
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
     // Check local install (for development)
     let local_install = manifest_dir.join("install");

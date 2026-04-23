@@ -24,6 +24,11 @@ once_cell = "1.19"
 thiserror = "1.0"
 tracing = "0.1"
 
+[features]
+default = []
+# Build cdylib (shared library) - requires C++ libs to be available
+cdylib = []
+
 [build-dependencies]
 cc = "1.0"
 pkg-config = "0.3"
