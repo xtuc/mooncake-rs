@@ -206,6 +206,7 @@ fn link_transfer_engine(lib_type: LibType) {
         LibType::Shared => {
             println!("cargo:rustc-link-lib=dylib=transfer_engine");
             println!("cargo:rustc-link-lib=dylib=mooncake_common");
+            println!("cargo:rustc-link-lib=dylib=asio");
         }
     }
 

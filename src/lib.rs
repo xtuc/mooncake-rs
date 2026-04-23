@@ -373,6 +373,30 @@ impl TransferEngine {
     }
 }
 
+impl TransferEngine {
+    /// Get the local IP and port assigned by Mooncake
+    pub fn get_local_addr(&self) -> Result<String> {
+        let mut buf = vec![0u8; 256];
+        let ret = unsafe {
+            getLocalIpAndPort(
+                self.inner.as_ptr(),
+                buf.as_mut_ptr() as *mut libc::c_char,
+                buf.len(),
+            )
+        };
+        if ret != 0 {
+            return Err(MooncakeError::Ffi(
+                "Failed to get local address".to_string(),
+            ));
+        }
+        let addr = std::str::from_utf8(&buf)
+            .map_err(|e| MooncakeError::Ffi(format!("Invalid UTF-8: {}", e)))?
+            .trim_end_matches('\0')
+            .to_string();
+        Ok(addr)
+    }
+}
+
 impl Drop for TransferEngine {
     fn drop(&mut self) {
         unsafe {
@@ -442,4 +466,6 @@ extern "C" {
     ) -> i32;
 
     fn freeBatchID(engine: *mut c_void, batch_id: u64) -> i32;
+
+    fn getLocalIpAndPort(engine: *mut c_void, buf_out: *mut libc::c_char, buf_len: usize) -> i32;
 }

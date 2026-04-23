@@ -29,8 +29,9 @@ mooncake:
 	@cd $(MOONCAKE_BUILD_DIR) && cmake $(CMAKE_OPTIONS) ..
 	@cd $(MOONCAKE_BUILD_DIR) && $(MAKE) -j$$(nproc)
 	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.a $(INSTALL_PREFIX)/lib/
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.a $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/libasio.so $(INSTALL_PREFIX)/lib/
 	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
 	@echo "Mooncake installed to $(INSTALL_PREFIX)"
 
@@ -61,8 +62,9 @@ dev:
 		-DWITH_EP=OFF -DWITH_RUST_EXAMPLE=OFF -DWITH_STORE_RUST=OFF ..
 	@cd $(MOONCAKE_BUILD_DIR) && $(MAKE) -j$$(nproc)
 	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.a $(INSTALL_PREFIX)/lib/
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.a $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/libasio.so $(INSTALL_PREFIX)/lib/
 	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
 	@MOONCAKE_ROOT=$(INSTALL_PREFIX) cargo build
 
@@ -70,8 +72,9 @@ dev:
 rebuild:
 	@cd $(MOONCAKE_BUILD_DIR) && $(MAKE) -j$$(nproc)
 	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.a $(INSTALL_PREFIX)/lib/
-	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.a $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-transfer-engine/src/libtransfer_engine.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/src/libmooncake_common.so $(INSTALL_PREFIX)/lib/
+	@cp $(MOONCAKE_BUILD_DIR)/mooncake-common/libasio.so $(INSTALL_PREFIX)/lib/
 	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
 	@MOONCAKE_ROOT=$(INSTALL_PREFIX) cargo build --release
 
