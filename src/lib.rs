@@ -395,6 +395,18 @@ impl TransferEngine {
             .to_string();
         Ok(addr)
     }
+
+    /// Sync segment cache to ensure local segment is visible to peers
+    pub fn sync_segment_cache(&self) -> Result<()> {
+        let ret = unsafe { syncSegmentCache(self.inner.as_ptr()) };
+        if ret != 0 {
+            return Err(MooncakeError::Ffi(format!(
+                "syncSegmentCache returned {}",
+                ret
+            )));
+        }
+        Ok(())
+    }
 }
 
 impl Drop for TransferEngine {
@@ -468,4 +480,6 @@ extern "C" {
     fn freeBatchID(engine: *mut c_void, batch_id: u64) -> i32;
 
     fn getLocalIpAndPort(engine: *mut c_void, buf_out: *mut libc::c_char, buf_len: usize) -> i32;
+
+    fn syncSegmentCache(engine: *mut c_void) -> i32;
 }
