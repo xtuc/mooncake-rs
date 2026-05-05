@@ -67,6 +67,13 @@ pub struct BufferEntry {
     pub length: usize,
 }
 
+/// Notification message
+#[repr(C)]
+pub struct NotifyMsg {
+    pub name: *mut libc::c_char,
+    pub msg: *mut libc::c_char,
+}
+
 /// Transfer request
 #[repr(C)]
 pub struct TransferRequest {
@@ -135,6 +142,36 @@ impl TransferEngine {
         }
     }
 
+    /// Uninstall a transport protocol
+    pub fn uninstall_transport(&self, proto: &str) -> Result<()> {
+        let proto_c =
+            CString::new(proto).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let rc = unsafe { uninstallTransport(self.inner.as_ptr(), proto_c.as_ptr()) };
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::TransportInstall(format!(
+                "uninstallTransport returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Discover topology (for auto-discover setups)
+    pub fn discover_topology(&self) -> Result<()> {
+        let rc = unsafe { discoverTopology(self.inner.as_ptr()) };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::Ffi(format!(
+                "discoverTopology returned {}",
+                rc
+            )))
+        }
+    }
+
     /// Register GPU memory buffer with Mooncake
     ///
     /// # Safety
@@ -198,6 +235,23 @@ impl TransferEngine {
         }
     }
 
+    /// Open a segment (peer) by name without cache
+    pub fn open_segment_no_cache(&self, segment_name: &str) -> Result<i32> {
+        let name_c =
+            CString::new(segment_name).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let segment_id = unsafe { openSegmentNoCache(self.inner.as_ptr(), name_c.as_ptr()) };
+
+        if segment_id < 0 {
+            Err(MooncakeError::SegmentOpen(format!(
+                "Failed to open segment '{}' (returned {})",
+                segment_name, segment_id
+            )))
+        } else {
+            Ok(segment_id)
+        }
+    }
+
     /// Close a segment
     pub fn close_segment(&self, segment_id: i32) -> Result<()> {
         let rc = unsafe { closeSegment(self.inner.as_ptr(), segment_id) };
@@ -207,6 +261,86 @@ impl TransferEngine {
         } else {
             Err(MooncakeError::SegmentOpen(format!(
                 "closeSegment returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Warmup EFA endpoints to a segment (eliminates first-batch fi_av_insert stall)
+    pub fn warmup_efa_segment(&self, segment_name: &str) -> Result<()> {
+        let name_c =
+            CString::new(segment_name).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let rc = unsafe { warmupEfaSegment(self.inner.as_ptr(), name_c.as_ptr()) };
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::Ffi(format!(
+                "warmupEfaSegment returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Remove a local segment by name
+    pub fn remove_local_segment(&self, segment_name: &str) -> Result<()> {
+        let name_c =
+            CString::new(segment_name).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let rc = unsafe { removeLocalSegment(self.inner.as_ptr(), name_c.as_ptr()) };
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::Ffi(format!(
+                "removeLocalSegment returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Register a batch of memory buffers
+    ///
+    /// # Safety
+    /// Caller must ensure all buffers are valid and remain valid until unregistered
+    pub unsafe fn register_memory_batch(
+        &self,
+        buffers: &mut [BufferEntry],
+        location: &str,
+    ) -> Result<()> {
+        let location_c =
+            CString::new(location).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let rc = registerLocalMemoryBatch(
+            self.inner.as_ptr(),
+            buffers.as_mut_ptr(),
+            buffers.len(),
+            location_c.as_ptr(),
+        );
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::MemoryRegistration(format!(
+                "registerLocalMemoryBatch returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Unregister a batch of memory buffers
+    ///
+    /// # Safety
+    /// Caller must ensure all addresses were previously registered
+    pub unsafe fn unregister_memory_batch(&self, addrs: &mut [*mut c_void]) -> Result<()> {
+        let rc = unregisterLocalMemoryBatch(self.inner.as_ptr(), addrs.as_mut_ptr(), addrs.len());
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::MemoryRegistration(format!(
+                "unregisterLocalMemoryBatch returned {}",
                 rc
             )))
         }
@@ -245,6 +379,109 @@ impl TransferEngine {
         } else {
             Err(MooncakeError::Transfer(format!(
                 "submitTransfer returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Submit a batch of transfer requests with notification
+    ///
+    /// # Arguments
+    /// * `batch_id` - Batch ID from allocate_batch_id
+    /// * `requests` - Array of transfer requests
+    /// * `notify_name` - Notification name
+    /// * `notify_msg` - Notification message
+    pub fn submit_transfer_with_notify(
+        &self,
+        batch_id: u64,
+        requests: &mut [TransferRequest],
+        notify_name: &str,
+        notify_msg: &str,
+    ) -> Result<()> {
+        let name_c =
+            CString::new(notify_name).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+        let msg_c =
+            CString::new(notify_msg).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let notify = NotifyMsg {
+            name: name_c.as_ptr() as *mut libc::c_char,
+            msg: msg_c.as_ptr() as *mut libc::c_char,
+        };
+
+        let rc = unsafe {
+            submitTransferWithNotify(
+                self.inner.as_ptr(),
+                batch_id,
+                requests.as_mut_ptr(),
+                requests.len(),
+                notify,
+            )
+        };
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::Transfer(format!(
+                "submitTransferWithNotify returned {}",
+                rc
+            )))
+        }
+    }
+
+    /// Get notifications from engine
+    ///
+    /// Returns a vector of (name, message) pairs
+    pub fn get_notifs(&self) -> Result<Vec<(String, String)>> {
+        let mut size: libc::c_int = 0;
+        let ptr = unsafe { getNotifsFromEngine(self.inner.as_ptr(), &mut size) };
+
+        if ptr.is_null() {
+            return Ok(Vec::new());
+        }
+
+        let mut result = Vec::with_capacity(size as usize);
+        unsafe {
+            for i in 0..size {
+                let msg = &*ptr.offset(i as isize);
+                let name = if msg.name.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr(msg.name)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                let message = if msg.msg.is_null() {
+                    String::new()
+                } else {
+                    std::ffi::CStr::from_ptr(msg.msg)
+                        .to_string_lossy()
+                        .into_owned()
+                };
+                result.push((name, message));
+            }
+            freeNotifsMsgBuf(ptr, size);
+        }
+
+        Ok(result)
+    }
+
+    /// Generate a notification in the engine
+    pub fn gen_notify(&self, target_id: u64, name: &str, msg: &str) -> Result<()> {
+        let name_c = CString::new(name).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+        let msg_c = CString::new(msg).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        let notify = NotifyMsg {
+            name: name_c.as_ptr() as *mut libc::c_char,
+            msg: msg_c.as_ptr() as *mut libc::c_char,
+        };
+
+        let rc = unsafe { genNotifyInEngine(self.inner.as_ptr(), target_id, notify) };
+
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(MooncakeError::Transfer(format!(
+                "genNotifyInEngine returned {}",
                 rc
             )))
         }
@@ -441,11 +678,27 @@ extern "C" {
 
     fn destroyTransferEngine(engine: *mut c_void);
 
+    fn discoverTopology(engine: *mut c_void) -> i32;
+
+    fn getLocalIpAndPort(engine: *mut c_void, buf_out: *mut libc::c_char, buf_len: usize) -> i32;
+
     fn installTransport(
         engine: *mut c_void,
         proto: *const libc::c_char,
         args: *mut c_void,
     ) -> *mut c_void;
+
+    fn uninstallTransport(engine: *mut c_void, proto: *const libc::c_char) -> i32;
+
+    fn openSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
+
+    fn openSegmentNoCache(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
+
+    fn closeSegment(engine: *mut c_void, segment_id: i32) -> i32;
+
+    fn warmupEfaSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
+
+    fn removeLocalSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
 
     fn registerLocalMemory(
         engine: *mut c_void,
@@ -457,9 +710,18 @@ extern "C" {
 
     fn unregisterLocalMemory(engine: *mut c_void, addr: *mut c_void) -> i32;
 
-    fn openSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
+    fn registerLocalMemoryBatch(
+        engine: *mut c_void,
+        buffer_list: *mut BufferEntry,
+        buffer_len: usize,
+        location: *const libc::c_char,
+    ) -> i32;
 
-    fn closeSegment(engine: *mut c_void, segment_id: i32) -> i32;
+    fn unregisterLocalMemoryBatch(
+        engine: *mut c_void,
+        addr_list: *mut *mut c_void,
+        addr_len: usize,
+    ) -> i32;
 
     fn allocateBatchID(engine: *mut c_void, batch_size: usize) -> u64;
 
@@ -470,6 +732,20 @@ extern "C" {
         count: usize,
     ) -> i32;
 
+    fn submitTransferWithNotify(
+        engine: *mut c_void,
+        batch_id: u64,
+        entries: *mut TransferRequest,
+        count: usize,
+        notify_msg: NotifyMsg,
+    ) -> i32;
+
+    fn getNotifsFromEngine(engine: *mut c_void, size: *mut libc::c_int) -> *mut NotifyMsg;
+
+    fn freeNotifsMsgBuf(msg: *mut NotifyMsg, size: libc::c_int) -> i32;
+
+    fn genNotifyInEngine(engine: *mut c_void, target_id: u64, notify_msg: NotifyMsg) -> i32;
+
     fn getTransferStatus(
         engine: *mut c_void,
         batch_id: u64,
@@ -478,8 +754,6 @@ extern "C" {
     ) -> i32;
 
     fn freeBatchID(engine: *mut c_void, batch_id: u64) -> i32;
-
-    fn getLocalIpAndPort(engine: *mut c_void, buf_out: *mut libc::c_char, buf_len: usize) -> i32;
 
     fn syncSegmentCache(engine: *mut c_void) -> i32;
 }
