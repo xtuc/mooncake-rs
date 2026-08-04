@@ -124,12 +124,61 @@ impl TransferEngine {
     }
 
     /// Install a transport protocol (e.g., "tcp", "rdma", "nvmeof")
+    ///
+    /// The engine picks NICs from the topology it discovered. On a host with
+    /// several HCAs that can pair a buffer with a NIC under a different PCIe
+    /// switch than the GPU holding it; use [`Self::install_transport_with_topology`]
+    /// to say which NIC serves which memory location.
     pub fn install_transport(&self, proto: &str) -> Result<()> {
         let proto_c =
             CString::new(proto).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
 
         let transport = unsafe {
             installTransport(self.inner.as_ptr(), proto_c.as_ptr(), std::ptr::null_mut())
+        };
+
+        if transport.is_null() {
+            Err(MooncakeError::TransportInstall(format!(
+                "Failed to install transport '{}',",
+                proto
+            )))
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Install a transport protocol with an explicit NIC priority matrix.
+    ///
+    /// `nic_priority_matrix` is JSON mapping a memory location to two lists of
+    /// HCA names, preferred and fallback:
+    ///
+    /// ```json
+    /// {"cuda:0": [["ibp4"], []], "cpu:0": [["ibp4"], []]}
+    /// ```
+    ///
+    /// The keys are the `location` strings passed to
+    /// [`Self::register_memory`] and [`Self::register_memory_batch`], so a
+    /// buffer registered as `cuda:0` is served by `ibp4`.
+    ///
+    /// The matrix **replaces** the discovered topology rather than extending
+    /// it, so it must name every location this process registers memory under.
+    /// A location missing from it has no NIC to fall back to.
+    pub fn install_transport_with_topology(
+        &self,
+        proto: &str,
+        nic_priority_matrix: &str,
+    ) -> Result<()> {
+        let proto_c =
+            CString::new(proto).map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+        let matrix_c = CString::new(nic_priority_matrix)
+            .map_err(|e| MooncakeError::InvalidString(e.to_string()))?;
+
+        // The engine reads `args[0]` as a NUL-terminated matrix string and
+        // ignores the rest, so a one-element array is enough.
+        let mut args: [*mut c_void; 1] = [matrix_c.as_ptr() as *mut c_void];
+
+        let transport = unsafe {
+            installTransport(self.inner.as_ptr(), proto_c.as_ptr(), args.as_mut_ptr())
         };
 
         if transport.is_null() {
@@ -685,7 +734,7 @@ extern "C" {
     fn installTransport(
         engine: *mut c_void,
         proto: *const libc::c_char,
-        args: *mut c_void,
+        args: *mut *mut c_void,
     ) -> *mut c_void;
 
     fn uninstallTransport(engine: *mut c_void, proto: *const libc::c_char) -> i32;
