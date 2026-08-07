@@ -1,13 +1,25 @@
-//! Mooncake Transfer Engine FFI bindings
+//! Mooncake Transfer Engine bindings
 //!
-//! FFI layer for Mooncake's TransferEngine.
-//! Wraps Mooncake C++ TransferEngine for zero-copy GPU memory transfer.
+//! Zero-copy GPU memory transfer over Mooncake's TransferEngine, with hardcoded
+//! peer discovery (no etcd/consul) for simple setups.
 //!
-//! Uses hardcoded peer discovery (no etcd/consul) for simple setups.
+//! Three layers, in one direction:
+//!
+//! - `ffi` declares the C boundary and nothing else.
+//! - [`topology`] is pure Rust with no boundary at all.
+//! - This module is the safe API: it owns the engine handle, turns return codes
+//!   into [`MooncakeError`], and is the only place the two meet.
 
 use std::ffi::{c_void, CString};
 use std::ptr::NonNull;
 use thiserror::Error;
+
+mod ffi;
+pub mod topology;
+
+use crate::ffi::*;
+pub use crate::ffi::{BufferEntry, NotifyMsg, Opcode, TransferRequest, TransferStatus};
+pub use crate::topology::NicPriorityMatrix;
 
 /// Errors from Mooncake FFI operations
 #[derive(Error, Debug)]
@@ -30,59 +42,54 @@ pub enum MooncakeError {
     #[error("Invalid string (contains null bytes): {0}")]
     InvalidString(String),
 
+    /// Self-describing, so a caller that got the name from a flag or a config
+    /// key can prefix it with that name and read as one sentence.
+    #[error("{0}")]
+    InvalidPeerName(String),
+
     #[error("FFI error: {0}")]
     Ffi(String),
 }
 
 pub type Result<T> = std::result::Result<T, MooncakeError>;
 
+
+/// Reject a name the peer will not be able to dial.
+///
+/// `P2PHANDSHAKE` is bidirectional: the name an engine is created with is what
+/// the peer dials back to set up the RDMA endpoint, so it has to resolve from
+/// the other host. Both ways of getting it wrong survive startup and surface
+/// much later as errors that read like a NIC fault — `received packet mismatch`
+/// with an empty `peer.local_nic_path`, or `Peer nic not found in that server:
+/// :PORT@ibp0` — so they are caught here instead.
+///
+/// The empty string is rejected because an engine named `""` starts, registers
+/// and plans normally, and fails only once a peer tries to resolve a host from
+/// `:PORT`. A name carrying a port is rejected because the engine appends its
+/// own, making `host:a:b`.
+pub fn validate_peer_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        return Err(MooncakeError::InvalidPeerName(
+            "peer name is empty; it must be an address the peer can dial, such as the output of \
+             `hostname -i`"
+                .to_string(),
+        ));
+    }
+
+    if name.contains(':') {
+        return Err(MooncakeError::InvalidPeerName(format!(
+            "peer name {name:?} must not include a port; mooncake appends its own"
+        )));
+    }
+
+    Ok(())
+}
+
 /// Opaque handle to Mooncake TransferEngine
 pub struct TransferEngine {
     inner: NonNull<c_void>,
 }
 
-/// Transfer request opcode
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Opcode {
-    Read = 0,
-    Write = 1,
-}
-
-/// Transfer status codes
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransferStatus {
-    Waiting = 0,
-    Pending = 1,
-    Invalid = 2,
-    Canceled = 3,
-    Completed = 4,
-    Timeout = 5,
-    Failed = 6,
-}
-
-/// Buffer entry for batch memory registration
-#[repr(C)]
-pub struct BufferEntry {
-    pub addr: *mut c_void,
-    pub length: usize,
-}
-
-/// Notification message
-#[repr(C)]
-pub struct NotifyMsg {
-    pub name: *mut libc::c_char,
-    pub msg: *mut libc::c_char,
-}
-
-/// Transfer request
-#[repr(C)]
-pub struct TransferRequest {
-    pub opcode: i32,
-    pub source: *mut c_void,
-    pub target_id: i32,
-    pub target_offset: u64,
-    pub length: u64,
-}
 
 impl TransferEngine {
     /// Create new TransferEngine with minimal metadata config
@@ -191,6 +198,30 @@ impl TransferEngine {
         }
     }
 
+    /// Install a transport protocol with a built NIC priority matrix.
+    ///
+    /// Same as [`Self::install_transport_with_topology`], but the matrix is
+    /// constructed rather than hand-written. See [`NicPriorityMatrix`].
+    ///
+    /// An empty matrix is rejected: it parses, installs, and leaves every
+    /// location without a NIC, which fails at the first transfer rather than
+    /// here.
+    pub fn install_transport_with_matrix(
+        &self,
+        proto: &str,
+        matrix: &NicPriorityMatrix,
+    ) -> Result<()> {
+        if matrix.is_empty() {
+            return Err(MooncakeError::TransportInstall(
+                "NIC priority matrix is empty; it replaces the discovered topology, so every \
+                 location this process registers memory under must appear in it"
+                    .to_string(),
+            ));
+        }
+
+        self.install_transport_with_topology(proto, &matrix.to_json())
+    }
+
     /// Uninstall a transport protocol
     pub fn uninstall_transport(&self, proto: &str) -> Result<()> {
         let proto_c =
@@ -222,6 +253,30 @@ impl TransferEngine {
     }
 
     /// Register GPU memory buffer with Mooncake
+    ///
+    /// `location` names the memory to the engine's topology and is how a NIC
+    /// gets pinned to it; it must be a key of the matrix passed to
+    /// [`Self::install_transport_with_matrix`], since that matrix replaces the
+    /// discovered topology rather than extending it.
+    ///
+    /// Two failure modes here are worth knowing because neither is reported the
+    /// way it reads, and neither can be checked from this side:
+    ///
+    /// - **Oversized registrations are silently truncated, not rejected.** A
+    ///   `length` above the device's `max_mr_size` is clamped to it, with a
+    ///   warning on the RDMA context path and none at all on the transport
+    ///   path. Registration then succeeds while the tail of the buffer is not
+    ///   registered, and only a transfer touching that tail fails. The limit is
+    ///   the device's, lowered further by `MC_MAX_MR_SIZE` if set, so there is
+    ///   no constant to compare against here.
+    ///
+    /// - **`addr` must be the base of its CUDA allocation, not merely
+    ///   aligned.** Without `nvidia-peermem` the engine registers device memory
+    ///   through `ibv_reg_dmabuf_mr`, and asks CUDA for a dmabuf handle
+    ///   covering the whole range containing `addr`, starting at `addr`. Passing
+    ///   a suballocated pointer makes that range overrun its allocation and
+    ///   fails with `Failed to retrieve dmabuf ... invalid argument`, which
+    ///   names neither the pointer nor the cause.
     ///
     /// # Safety
     /// Caller must ensure `addr` is valid GPU memory and remains valid
@@ -596,6 +651,37 @@ impl TransferEngine {
         }
     }
 
+    /// Submit one batch and block until every request in it has landed.
+    ///
+    /// This is [`Self::allocate_batch_id`], [`Self::submit_transfer`],
+    /// [`Self::wait_for_batch`] and [`Self::free_batch_id`] in the one order
+    /// that does not leak. The id is freed on every path, including a failed
+    /// submit and a failed wait: the engine's pool of ids is finite, so a run
+    /// of transfers that returned early would eventually be unable to start
+    /// one, and the failure then names the wrong operation.
+    ///
+    /// `requests` is taken as a single batch and is not split. The engine
+    /// allocates per batch id, so callers moving a large plan should chunk it
+    /// themselves; there is no fixed limit on the RDMA path, only the size of
+    /// the allocation this implies.
+    pub fn submit_and_wait(&self, requests: &mut [TransferRequest]) -> Result<()> {
+        if requests.is_empty() {
+            return Ok(());
+        }
+
+        let count = requests.len();
+        let batch_id = self.allocate_batch_id(count)?;
+
+        let result = self
+            .submit_transfer(batch_id, requests)
+            .and_then(|()| self.wait_for_batch(batch_id, count));
+
+        let freed = self.free_batch_id(batch_id);
+
+        result?;
+        freed
+    }
+
     /// Transfer data from remote to local (blocking helper)
     ///
     /// # Arguments
@@ -707,102 +793,16 @@ impl Drop for TransferEngine {
 unsafe impl Send for TransferEngine {}
 unsafe impl Sync for TransferEngine {}
 
-// C struct for transfer status
-#[repr(C)]
-struct TransferStatusC {
-    status: i32,
-    transferred_bytes: u64,
-}
 
-// FFI declarations - bindgen-generated from transfer_engine_c.h
-#[link(name = "transfer_engine")]
-extern "C" {
-    fn createTransferEngine(
-        metadata_conn_string: *const libc::c_char,
-        local_server_name: *const libc::c_char,
-        ip_or_host_name: *const libc::c_char,
-        rpc_port: u64,
-        auto_discover: i32,
-    ) -> *mut c_void;
+#[cfg(test)]
+mod test {
+    use super::*;
 
-    fn destroyTransferEngine(engine: *mut c_void);
-
-    fn discoverTopology(engine: *mut c_void) -> i32;
-
-    fn getLocalIpAndPort(engine: *mut c_void, buf_out: *mut libc::c_char, buf_len: usize) -> i32;
-
-    fn installTransport(
-        engine: *mut c_void,
-        proto: *const libc::c_char,
-        args: *mut *mut c_void,
-    ) -> *mut c_void;
-
-    fn uninstallTransport(engine: *mut c_void, proto: *const libc::c_char) -> i32;
-
-    fn openSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
-
-    fn openSegmentNoCache(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
-
-    fn closeSegment(engine: *mut c_void, segment_id: i32) -> i32;
-
-    fn warmupEfaSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
-
-    fn removeLocalSegment(engine: *mut c_void, segment_name: *const libc::c_char) -> i32;
-
-    fn registerLocalMemory(
-        engine: *mut c_void,
-        addr: *mut c_void,
-        length: usize,
-        location: *const libc::c_char,
-        remote_accessible: i32,
-    ) -> i32;
-
-    fn unregisterLocalMemory(engine: *mut c_void, addr: *mut c_void) -> i32;
-
-    fn registerLocalMemoryBatch(
-        engine: *mut c_void,
-        buffer_list: *mut BufferEntry,
-        buffer_len: usize,
-        location: *const libc::c_char,
-    ) -> i32;
-
-    fn unregisterLocalMemoryBatch(
-        engine: *mut c_void,
-        addr_list: *mut *mut c_void,
-        addr_len: usize,
-    ) -> i32;
-
-    fn allocateBatchID(engine: *mut c_void, batch_size: usize) -> u64;
-
-    fn submitTransfer(
-        engine: *mut c_void,
-        batch_id: u64,
-        entries: *mut TransferRequest,
-        count: usize,
-    ) -> i32;
-
-    fn submitTransferWithNotify(
-        engine: *mut c_void,
-        batch_id: u64,
-        entries: *mut TransferRequest,
-        count: usize,
-        notify_msg: NotifyMsg,
-    ) -> i32;
-
-    fn getNotifsFromEngine(engine: *mut c_void, size: *mut libc::c_int) -> *mut NotifyMsg;
-
-    fn freeNotifsMsgBuf(msg: *mut NotifyMsg, size: libc::c_int) -> i32;
-
-    fn genNotifyInEngine(engine: *mut c_void, target_id: u64, notify_msg: NotifyMsg) -> i32;
-
-    fn getTransferStatus(
-        engine: *mut c_void,
-        batch_id: u64,
-        task_id: usize,
-        status: *mut TransferStatusC,
-    ) -> i32;
-
-    fn freeBatchID(engine: *mut c_void, batch_id: u64) -> i32;
-
-    fn syncSegmentCache(engine: *mut c_void) -> i32;
+    #[test]
+    fn peer_name_must_be_dialable() {
+        assert!(validate_peer_name("10.0.1.170").is_ok());
+        assert!(validate_peer_name("").is_err());
+        assert!(validate_peer_name("   ").is_err());
+        assert!(validate_peer_name("10.0.1.170:12345").is_err());
+    }
 }
