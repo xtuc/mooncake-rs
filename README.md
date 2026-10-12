@@ -2,62 +2,31 @@
 
 FFI bindings for Mooncake Transfer Engine.
 
-## Building Shared Libraries (.so)
+## Building
 
-To build Mooncake as shared libraries instead of static:
-
-```bash
-cd deps/mooncake
-mkdir -p build && cd build
-
-cmake \
-  -DBUILD_SHARED_LIBS=ON \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DWITH_TE=ON \
-  -DWITH_STORE=OFF \
-  -DWITH_P2P_STORE=OFF \
-  -DWITH_EP=OFF \
-  ..
-
-make -j$(nproc)
-```
-
-This produces:
-- `build/mooncake-transfer-engine/src/libtransfer_engine.so`
-- `build/mooncake-common/src/libmooncake_common.so`
-
-### Installation
+Initialize Mooncake submodules and run default build:
 
 ```bash
-sudo make install
-# Or to custom prefix:
-cmake -DCMAKE_INSTALL_PREFIX=/path/to/install ..
-make && make install
-```
-
-### Usage with This Crate
-
-Set the library path:
-
-```bash
-export MOONCAKE_ROOT=/path/to/mooncake/install
-# Or use system paths
-cargo build
-```
-
-## Development
-
-Build with local static libs (default):
-
-```bash
+git submodule update --init --recursive
 make
 ```
 
-This builds mooncake from source and links statically.
+`make` builds Mooncake shared libraries (`libtransfer_engine.so`,
+`libmooncake_common.so`, `libasio.so`) under `install/lib`, then builds Rust
+crate with `MOONCAKE_ROOT` set. `build.rs` finds and links existing libraries;
+it does not compile Mooncake. For Cargo-only builds, first install Mooncake
+and set `MOONCAKE_ROOT` to its installation prefix or
+`TRANSFER_ENGINE_LIB_DIR` to its library directory. Published crate excludes
+`deps/mooncake`, so it also needs separately installed libraries.
+
+`make mooncake` installs Mooncake's yalantinglibs dependency into `INSTALL_PREFIX` (default `./install`) before building the shared libraries. Set `USE_CUDA=ON` for CUDA transfers and `INSTALL_PREFIX=/usr/local` for system libraries.
+
+Set `LD_LIBRARY_PATH=install/lib` when running linked binaries, including
+`cargo run`, so loader can find Mooncake and `libasio.so`.
 
 ## Dependencies
 
 - libibverbs (RDMA)
 - librdmacm (RDMA connection manager)
 - CMake 3.16+
-- C++ compiler with C++17 support
+- C++ compiler with C++20 support

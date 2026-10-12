@@ -5,10 +5,21 @@ MOONCAKE_DIR = deps/mooncake
 MOONCAKE_BUILD_DIR = $(MOONCAKE_DIR)/build
 INSTALL_PREFIX = $(PWD)/install
 TE_SRC_DIR = $(MOONCAKE_DIR)/mooncake-transfer-engine
+YLT_DIR = $(MOONCAKE_DIR)/extern/yalantinglibs
+YLT_BUILD_DIR = $(YLT_DIR)/build
+USE_CUDA ?= OFF
 
 # CMake options
+# mooncake-common includes ylt headers without linking its CMake target.
 CMAKE_OPTIONS = -DCMAKE_BUILD_TYPE=Release \
+                -DBUILD_SHARED_LIBS=ON \
                 -DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
+                -DCMAKE_PREFIX_PATH=$(INSTALL_PREFIX) \
+                -DCMAKE_CXX_FLAGS=-I$(INSTALL_PREFIX)/include \
+                -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+                -DCMAKE_INSTALL_RPATH=$(INSTALL_PREFIX)/lib \
+                -DBUILD_EXAMPLES=OFF -DBUILD_UNIT_TESTS=OFF \
+                -DUSE_CUDA=$(USE_CUDA) \
                 -DWITH_TE=ON \
                 -DWITH_STORE=OFF \
                 -DWITH_P2P_STORE=OFF \
@@ -17,13 +28,21 @@ CMAKE_OPTIONS = -DCMAKE_BUILD_TYPE=Release \
                 -DWITH_STORE_RUST=OFF
 
 # Phony targets
-.PHONY: all clean mooncake rust install
+.PHONY: all clean yalantinglibs mooncake rust install
 
 # Default target builds everything
 all: mooncake rust
 
+# Install Mooncake's header-only dependency before configuring the transfer engine.
+yalantinglibs:
+	@cmake -S $(YLT_DIR) -B $(YLT_BUILD_DIR) \
+		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
+		-DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARK=OFF -DBUILD_UNIT_TESTS=OFF
+	@cmake --build $(YLT_BUILD_DIR) -j$$(nproc)
+	@cmake --install $(YLT_BUILD_DIR)
+
 # Build mooncake C++ library
-mooncake:
+mooncake: yalantinglibs
 	@echo "Building Mooncake Transfer Engine..."
 	@mkdir -p $(MOONCAKE_BUILD_DIR)
 	@cd $(MOONCAKE_BUILD_DIR) && cmake $(CMAKE_OPTIONS) ..
@@ -57,6 +76,7 @@ dev:
 	@echo "Building Mooncake (debug)..."
 	@mkdir -p $(MOONCAKE_BUILD_DIR)
 	@cd $(MOONCAKE_BUILD_DIR) && cmake -DCMAKE_BUILD_TYPE=Debug \
+		-DBUILD_SHARED_LIBS=ON \
 		-DCMAKE_INSTALL_PREFIX=$(INSTALL_PREFIX) \
 		-DWITH_TE=ON -DWITH_STORE=OFF -DWITH_P2P_STORE=OFF \
 		-DWITH_EP=OFF -DWITH_RUST_EXAMPLE=OFF -DWITH_STORE_RUST=OFF ..
@@ -78,12 +98,11 @@ rebuild:
 	@cp -r $(TE_SRC_DIR)/include/* $(INSTALL_PREFIX)/include/
 	@MOONCAKE_ROOT=$(INSTALL_PREFIX) cargo build --release
 
-# Build shared libraries (.so) instead of static
+# Build shared libraries (.so) explicitly
 shared:
 	@echo "Building Mooncake shared libraries (.so)..."
 	@mkdir -p $(MOONCAKE_BUILD_DIR)
 	@cd $(MOONCAKE_BUILD_DIR) && cmake \
-		-DBUILD_SHARED_LIBS=ON \
 		$(CMAKE_OPTIONS) ..
 	@cd $(MOONCAKE_BUILD_DIR) && $(MAKE) -j$$(nproc)
 	@mkdir -p $(INSTALL_PREFIX)/lib $(INSTALL_PREFIX)/include
